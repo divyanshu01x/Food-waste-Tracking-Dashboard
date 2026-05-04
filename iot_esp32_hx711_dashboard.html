@@ -1,0 +1,1238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IoT-SENSE | ESP32 · HX711 · Load Cell Monitor</title>
+
+<!--
+  ============================================================
+  IoT-SENSE Dashboard — ESP32 + HX711 + Load Cell Monitor
+  ============================================================
+  CUSTOMIZATION GUIDE:
+  1. Edit the NODES array below to match your real device IDs,
+     MAC addresses, IP addresses, calibration factors, offsets.
+  2. Replace the simWeight() function with a real fetch() or
+     WebSocket call to your ESP32 endpoints.
+  3. To connect real hardware: search for "REPLACE WITH REAL DATA"
+     comments throughout this file.
+  ============================================================
+-->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+
+<style>
+  /* ===================== CSS VARIABLES ===================== */
+  :root {
+    --bg:          #0e0f11;
+    --bg2:         #141618;
+    --bg3:         #1a1c1f;
+    --bg4:         #212326;
+    --border:      #2a2d31;
+    --border2:     #363a3f;
+    --amber:       #f0a030;
+    --amber2:      #ffbe5c;
+    --amber-dim:   #6b4510;
+    --teal:        #26c0a0;
+    --teal-dim:    #0a4038;
+    --red:         #e85050;
+    --red-dim:     #5c1818;
+    --green:       #40c060;
+    --green-dim:   #0d3d1a;
+    --blue:        #4898e8;
+    --blue-dim:    #102040;
+    --muted:       #6b7280;
+    --muted2:      #8a9aaa;
+    --text:        #d8dde5;
+    --text2:       #a0aab8;
+    --mono:        'JetBrains Mono', monospace;
+    --sans:        'Syne', sans-serif;
+  }
+
+  /* ===================== RESET ===================== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ===================== HEADER ===================== */
+  .header {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .header-brand { display: flex; align-items: center; gap: 10px; }
+
+  .logo-box {
+    width: 32px; height: 32px;
+    background: var(--amber);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .logo-box svg { width: 18px; height: 18px; fill: #0e0f11; }
+
+  .brand-text {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--amber);
+    letter-spacing: 0.04em;
+  }
+  .brand-sub {
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .header-right { display: flex; align-items: center; gap: 12px; }
+
+  .status-pill {
+    display: flex; align-items: center; gap: 5px;
+    padding: 4px 12px;
+    background: var(--green-dim);
+    border: 1px solid var(--green);
+    border-radius: 20px;
+    font-size: 10px;
+    color: var(--green);
+    letter-spacing: 0.06em;
+    user-select: none;
+  }
+  .status-pill.disconnected { background: var(--red-dim); border-color: var(--red); color: var(--red); }
+
+  .pulse { width: 6px; height: 6px; background: var(--green); border-radius: 50%; animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  .time-display { font-size: 11px; color: var(--muted2); font-variant-numeric: tabular-nums; }
+
+  /* ===================== TABS ===================== */
+  .tabs {
+    display: flex;
+    gap: 2px;
+    padding: 8px 20px 0;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .tab {
+    padding: 7px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    border: none; background: none;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
+  .tab:hover { color: var(--text2); }
+  .tab.active { color: var(--amber); border-bottom-color: var(--amber); }
+
+  /* ===================== LAYOUT ===================== */
+  .main { padding: 14px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .tab-content { display: none; }
+  .tab-content.active { display: flex; flex-direction: column; gap: 12px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+
+  /* ===================== DEVICE CARDS ===================== */
+  .device-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .device-card:hover { border-color: var(--border2); }
+  .device-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--amber);
+  }
+  .device-card.offline::before { background: var(--red); }
+  .device-card.warning::before { background: #e0a020; }
+
+  .device-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .device-id {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 0.04em;
+  }
+  .device-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+  .device-status-dot.offline { background: var(--red); }
+  .device-status-dot.online { animation: pulse 1.5s infinite; }
+
+  .device-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
+  .dev-metric { display: flex; flex-direction: column; }
+  .dev-label { font-size: 9px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .dev-value { font-size: 12px; color: var(--amber2); font-variant-numeric: tabular-nums; margin-top: 1px; }
+
+  .signal-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; margin-left: 3px; }
+  .signal-bars span { width: 3px; background: var(--border2); border-radius: 1px; transition: background 0.3s; }
+  .signal-bars span.active { background: var(--teal); }
+
+  /* ===================== PANELS ===================== */
+  .panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .panel-header {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--bg3);
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .panel-title {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text2);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .panel-body { padding: 12px 14px; }
+  .panel-body.no-pad { padding: 0; }
+
+  .panel-badge {
+    font-size: 9px; padding: 2px 8px;
+    border-radius: 3px;
+    background: var(--amber-dim);
+    color: var(--amber);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .panel-badge.teal  { background: var(--teal-dim);  color: var(--teal); }
+  .panel-badge.green { background: var(--green-dim); color: var(--green); }
+  .panel-badge.red   { background: var(--red-dim);   color: var(--red); }
+  .panel-badge.blue  { background: var(--blue-dim);  color: var(--blue); }
+
+  /* ===================== WEIGHT HERO ===================== */
+  .weight-hero { display: flex; flex-direction: column; align-items: center; padding: 8px 0 12px; }
+  .weight-label { font-size: 9px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 4px; }
+  .weight-value {
+    font-family: var(--sans);
+    font-size: 48px;
+    font-weight: 800;
+    color: var(--amber);
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .weight-unit { font-size: 16px; color: var(--amber-dim); margin-left: 4px; }
+
+  .weight-bar-wrap { width: 100%; height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; margin: 10px 0; }
+  .weight-bar { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--teal), var(--amber)); transition: width 0.4s ease; }
+
+  .weight-metrics { display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; width: 100%; }
+  .wm-card {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 6px 8px;
+    text-align: center;
+  }
+  .wm-label { font-size: 9px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+  .wm-val { font-size: 13px; color: var(--text); margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  /* ===================== THRESHOLD BARS ===================== */
+  .threshold-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .th-label { font-size: 9px; color: var(--muted); width: 62px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .th-track { flex: 1; height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
+  .th-fill { height: 100%; border-radius: 2px; transition: width 0.4s; }
+  .th-val { font-size: 10px; color: var(--text2); width: 50px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* ===================== REGISTER ROWS ===================== */
+  .register-grid { display: flex; flex-direction: column; gap: 5px; }
+  .reg-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 5px 10px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 11px;
+    gap: 8px;
+  }
+  .reg-name { color: var(--muted2); white-space: nowrap; }
+  .reg-val { color: var(--amber2); font-variant-numeric: tabular-nums; text-align: right; word-break: break-all; }
+  .reg-val.bin   { font-size: 10px; color: var(--teal); letter-spacing: 0.05em; }
+  .reg-val.green { color: var(--green); }
+  .reg-val.red   { color: var(--red); }
+  .reg-val.teal  { color: var(--teal); }
+
+  /* ===================== ESP INFO GRID ===================== */
+  .esp-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .esp-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 5px 10px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 11px;
+    gap: 8px;
+  }
+  .esp-key { color: var(--muted2); white-space: nowrap; }
+  .esp-val { color: var(--text); text-align: right; }
+  .esp-val.mono { font-family: var(--mono); color: var(--teal); font-size: 10px; }
+
+  /* ===================== CHART ===================== */
+  .chart-wrap { position: relative; height: 180px; }
+  .chart-wrap canvas { width: 100% !important; }
+
+  /* ===================== SELECTOR BUTTONS ===================== */
+  .selector-row { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  .sel-btn {
+    padding: 3px 10px;
+    font-family: var(--mono);
+    font-size: 10px;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--muted2);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .sel-btn.active { border-color: var(--amber); color: var(--amber); background: var(--amber-dim); }
+  .sel-btn:hover:not(.active) { color: var(--text2); }
+
+  /* ===================== ADC STREAM ===================== */
+  .adc-stream {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--teal);
+    line-height: 1.85;
+    height: 130px;
+    overflow: hidden;
+  }
+
+  /* ===================== DATA LOG TABLE ===================== */
+  .scrollbox { overflow-y: auto; }
+  .scrollbox::-webkit-scrollbar { width: 4px; }
+  .scrollbox::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  .log-table { width: 100%; border-collapse: collapse; }
+  .log-table th {
+    font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left; background: var(--bg3);
+    position: sticky; top: 0;
+    white-space: nowrap;
+  }
+  .log-table td {
+    padding: 5px 10px;
+    font-size: 11px;
+    color: var(--text2);
+    border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .log-table tr:hover td { background: var(--bg3); }
+  .log-table td.ok   { color: var(--green); }
+  .log-table td.warn { color: var(--amber); }
+  .log-table td.err  { color: var(--red); }
+
+  /* ===================== TIMING DIAGRAM ===================== */
+  #timingViz svg { width: 100%; overflow: visible; }
+
+  /* ===================== RESPONSIVE ===================== */
+  @media (max-width: 800px) {
+    .grid-2, .grid-3, .esp-detail-grid { grid-template-columns: 1fr; }
+    .header { flex-wrap: wrap; gap: 8px; }
+    .weight-value { font-size: 36px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ==================== HEADER ==================== -->
+<div class="header">
+  <div class="header-brand">
+    <div class="logo-box">
+      <svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+    </div>
+    <div>
+      <div class="brand-text">IoT-SENSE</div>
+      <div class="brand-sub">ESP32 · HX711 · Load Cell Monitor</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="status-pill" id="streamStatus">
+      <div class="pulse"></div>
+      LIVE STREAM
+    </div>
+    <div class="time-display" id="clockDisplay">--:--:--</div>
+  </div>
+</div>
+
+<!-- ==================== TABS ==================== -->
+<div class="tabs">
+  <button class="tab active" onclick="switchTab(event,'overview')">Overview</button>
+  <button class="tab" onclick="switchTab(event,'livedata')">Live Data</button>
+  <button class="tab" onclick="switchTab(event,'devices')">Device Details</button>
+  <button class="tab" onclick="switchTab(event,'log')">Data Log</button>
+</div>
+
+<!-- ==================== TAB: OVERVIEW ==================== -->
+<div class="main tab-content active" id="tab-overview">
+
+  <!-- Device Strip (3 ESP32 nodes) -->
+  <div class="grid-3" id="deviceStrip"></div>
+
+  <!-- Weight + HX711 Registers -->
+  <div class="grid-2">
+    <!-- Load Cell Weight Panel -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Load Cell — Node 1</span>
+        <span class="panel-badge green" id="lcStatus">STABLE</span>
+      </div>
+      <div class="panel-body">
+        <div class="weight-hero">
+          <div class="weight-label">Current Weight</div>
+          <div>
+            <span class="weight-value" id="weightDisplay">0.00</span>
+            <span class="weight-unit">kg</span>
+          </div>
+        </div>
+        <div class="weight-bar-wrap">
+          <div class="weight-bar" id="weightBar" style="width:0%"></div>
+        </div>
+        <div class="weight-metrics">
+          <div class="wm-card">
+            <div class="wm-label">Tare</div>
+            <div class="wm-val" id="tareVal">0.00 kg</div>
+          </div>
+          <div class="wm-card">
+            <div class="wm-label">Max Load</div>
+            <!-- REPLACE: set your load cell's rated max capacity -->
+            <div class="wm-val" id="maxLoad">50.00 kg</div>
+          </div>
+          <div class="wm-card">
+            <div class="wm-label">Min Today</div>
+            <div class="wm-val" id="minVal">-- kg</div>
+          </div>
+        </div>
+        <div style="margin-top:10px;">
+          <div class="threshold-row">
+            <span class="th-label">Capacity</span>
+            <div class="th-track"><div class="th-fill" id="capBar" style="width:0%;background:var(--teal)"></div></div>
+            <span class="th-val" id="capPct">0%</span>
+          </div>
+          <div class="threshold-row">
+            <span class="th-label">Overload</span>
+            <div class="th-track"><div class="th-fill" id="ovBar" style="width:0%;background:var(--red)"></div></div>
+            <span class="th-val" id="ovPct">0%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HX711 ADC Register Panel -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">HX711 ADC Registers</span>
+        <span class="panel-badge teal">24-BIT</span>
+      </div>
+      <div class="panel-body">
+        <div class="register-grid" id="hx711Regs"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart + ESP32 Quick Info -->
+  <div class="grid-2">
+    <!-- Weight Chart -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Weight History</span>
+        <div class="selector-row">
+          <button class="sel-btn active" onclick="setRange(this,60)">1m</button>
+          <button class="sel-btn" onclick="setRange(this,300)">5m</button>
+          <button class="sel-btn" onclick="setRange(this,600)">10m</button>
+        </div>
+      </div>
+      <div class="panel-body" style="padding:10px 10px 6px;">
+        <div class="chart-wrap">
+          <canvas id="weightChart" role="img" aria-label="Real-time weight history chart from load cell">No data yet</canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ESP32 System Quick Info -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">ESP32 System — Node 1</span>
+        <span class="panel-badge">ESP-IDF</span>
+      </div>
+      <div class="panel-body">
+        <div class="esp-detail-grid" id="espQuickInfo"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== TAB: LIVE DATA ==================== -->
+<div class="main tab-content" id="tab-livedata">
+
+  <!-- Multi-Node Chart -->
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Multi-Node Real-Time Weight Stream</span>
+      <div class="selector-row">
+        <button class="sel-btn active" onclick="setNode(this,0)">Node 1</button>
+        <button class="sel-btn" onclick="setNode(this,1)">Node 2</button>
+        <button class="sel-btn" onclick="setNode(this,2)">Node 3</button>
+        <button class="sel-btn" onclick="setNode(this,3)">All</button>
+      </div>
+    </div>
+    <div class="panel-body" style="padding:10px 10px 6px;">
+      <div style="position:relative;height:200px;">
+        <canvas id="multiChart" role="img" aria-label="Multi-node live weight comparison chart">Loading...</canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADC Stream + Timing Diagram -->
+  <div class="grid-2">
+    <!-- Raw ADC Output -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Raw ADC Output — HX711</span>
+        <span class="panel-badge teal">GAIN ×128</span>
+      </div>
+      <div class="panel-body">
+        <div style="font-size:11px;color:var(--muted2);margin-bottom:8px;">
+          Samples at 80 SPS · Channel A · 24-bit signed integer
+        </div>
+        <div class="adc-stream" id="adcStream"></div>
+      </div>
+    </div>
+
+    <!-- HX711 Protocol Timing -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">HX711 Protocol Timing</span>
+        <span class="panel-badge">PD_SCK / DOUT</span>
+      </div>
+      <div class="panel-body">
+        <div style="font-size:11px;color:var(--muted2);margin-bottom:8px;">
+          Clock pulses · PD_SCK high/low · DOUT data handshake
+        </div>
+        <div id="timingViz"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== TAB: DEVICE DETAILS ==================== -->
+<div class="main tab-content" id="tab-devices">
+  <div class="grid-3" id="deviceStripFull"></div>
+  <div class="grid-3" id="deviceDetailGrid"></div>
+</div>
+
+<!-- ==================== TAB: DATA LOG ==================== -->
+<div class="main tab-content" id="tab-log">
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Data Log</span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span class="panel-badge" id="logCount">0 records</span>
+        <button class="sel-btn" onclick="clearLog()">Clear</button>
+        <button class="sel-btn" onclick="exportCSV()">Export CSV</button>
+      </div>
+    </div>
+    <div class="panel-body no-pad">
+      <div class="scrollbox" style="max-height:500px;">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Node</th>
+              <th>Weight (kg)</th>
+              <th>Raw ADC</th>
+              <th>Temp (°C)</th>
+              <th>RSSI (dBm)</th>
+              <th>Free Heap</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="logBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ==================== JAVASCRIPT ==================== -->
+<script>
+/* ============================================================
+   CONFIGURATION — Edit this section to match your hardware
+   ============================================================ */
+const CONFIG = {
+  maxCapacity: 50,          // kg — your load cell's max rated capacity
+  overloadThreshold: 48,    // kg — trigger OVERLOAD alert above this
+  warningThreshold: 40,     // kg — trigger WARNING above this
+  maxLogRows: 500,          // how many rows to keep in the data log
+  updateIntervalMs: 1000,   // how often the UI updates (ms)
+  adcStreamRate: 2,         // update ADC stream every N ticks
+  logRate: 5,               // write a log row every N ticks
+  useMockData: true,        // set false when connecting real hardware
+};
+
+/* ============================================================
+   NODE DEFINITIONS — Replace with your real device info
+   ============================================================ */
+const NODES = [
+  {
+    id: 'ESP32-A4F2',                   // Device name / hostname
+    mac: 'A4:F2:3B:11:CC:01',           // MAC address from esp_wifi_get_mac()
+    ip: '192.168.1.101',                // IP from WiFi.localIP()
+    ssid: 'IoT_Net_5G',                 // WiFi SSID
+    base: 12.4,                         // Mock: base weight for simulation (kg)
+    gain: 128,                          // HX711 gain: 128 (Ch A), 64 (Ch A), 32 (Ch B)
+    sps: 80,                            // HX711 sample rate: 80 or 10
+    calFactor: 452.6,                   // Calibration factor (raw units per kg)
+    offset: 82340,                      // Tare offset (raw ADC at zero weight)
+    channel: 'A',                       // HX711 channel A or B
+  },
+  {
+    id: 'ESP32-B8D4',
+    mac: 'B8:D4:7A:22:FF:02',
+    ip: '192.168.1.102',
+    ssid: 'IoT_Net_5G',
+    base: 28.7,
+    gain: 64, sps: 80,
+    calFactor: 451.1,
+    offset: 83120,
+    channel: 'A',
+  },
+  {
+    id: 'ESP32-C2E6',
+    mac: 'C2:E6:5C:33:AA:03',
+    ip: '192.168.1.103',
+    ssid: 'IoT_Net_5G',
+    base: 5.1,
+    gain: 128, sps: 10,
+    calFactor: 453.9,
+    offset: 81950,
+    channel: 'A',
+  },
+];
+
+/* ============================================================
+   REAL DATA INTEGRATION — Replace simWeight() with these
+   ============================================================
+
+   Option A: HTTP polling from ESP32 (simplest)
+   ─────────────────────────────────────────────
+   On your ESP32, expose an endpoint like:
+     GET http://192.168.1.101/data
+     → { "weight": 12.45, "raw": 83982, "temp": 41.2, "rssi": -62, "heap": 187432 }
+
+   Then replace simWeight(n) with:
+
+     async function fetchNodeData(n) {
+       try {
+         const res = await fetch(`http://${NODES[n].ip}/data`);
+         const json = await res.json();
+         weights[n]  = json.weight;
+         adcRaws[n]  = json.raw;
+         temps[n]    = json.temp;
+         rssi[n]     = json.rssi;
+         heaps[n]    = json.heap;
+       } catch(e) {
+         console.error('Node ' + n + ' unreachable:', e);
+       }
+     }
+
+   Option B: WebSocket (real-time push from ESP32)
+   ────────────────────────────────────────────────
+   On your ESP32, use the AsyncWebServer + WebSocket library.
+   In JS:
+
+     const ws = new WebSocket('ws://192.168.1.101/ws');
+     ws.onmessage = (e) => {
+       const d = JSON.parse(e.data);
+       weights[0] = d.weight;
+       adcRaws[0] = d.raw;
+       updateWeightDisplay();
+       updateCharts();
+     };
+
+   Option C: MQTT via MQTT.js over WebSockets
+   ────────────────────────────────────────────
+     <script src="https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"><\/script>
+     const client = mqtt.connect('ws://your-broker:8083/mqtt');
+     client.subscribe('iot/node1/weight');
+     client.on('message', (topic, msg) => {
+       weights[0] = parseFloat(msg.toString());
+       updateWeightDisplay();
+     });
+   ============================================================ */
+
+
+/* ============================================================
+   RUNTIME STATE — you shouldn't need to edit below this line
+   ============================================================ */
+let weights  = [0, 0, 0];
+let rssi     = [-62, -71, -55];
+let heaps    = [187432, 192104, 183820];
+let temps    = [41.2, 38.8, 43.5];
+let uptimes  = [3600, 7200, 1800];
+let adcRaws  = [0, 0, 0];
+let history  = [[], [], []];
+let logData  = [];
+let chartRange   = 60;
+let selectedNode = 0;
+let wChart, mChart;
+let tick = 0;
+
+/* ============================================================
+   HELPERS
+   ============================================================ */
+function timestamp() {
+  return new Date().toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function rssiToBarCount(r) {
+  if (r > -55) return 4;
+  if (r > -65) return 3;
+  if (r > -75) return 2;
+  return 1;
+}
+
+function signalBarsHTML(n) {
+  const heights = [5, 8, 11, 14];
+  const bars = rssiToBarCount(rssi[n]);
+  return `<span class="signal-bars">${heights.map((h,i) =>
+    `<span style="height:${h}px" class="${i < bars ? 'active' : ''}"></span>`
+  ).join('')}</span>`;
+}
+
+/* ============================================================
+   MOCK DATA SIMULATION
+   Replace this section with real hardware reads when ready
+   ============================================================ */
+function simWeight(n) {
+  /* REPLACE WITH REAL DATA: return the weight from your ESP32 */
+  const drift = Math.sin(Date.now() / 8000 + n * 2) * 2.5;
+  const noise = (Math.random() - 0.5) * 0.18;
+  return Math.max(0, NODES[n].base + drift + noise);
+}
+
+function simADC(w, n) {
+  /* REPLACE WITH REAL DATA: return raw HX711 int32 reading */
+  return Math.round(NODES[n].offset + w * NODES[n].calFactor + (Math.random() - 0.5) * 50);
+}
+
+function simRSSI(n) {
+  /* REPLACE WITH REAL DATA: return WiFi.RSSI() from ESP32 */
+  return rssi[n] + Math.round((Math.random() - 0.5) * 3);
+}
+
+function simTemp(n) {
+  /* REPLACE WITH REAL DATA: return ESP32 internal temp sensor */
+  return parseFloat((temps[n] + (Math.random() - 0.5) * 0.1).toFixed(2));
+}
+
+/* ============================================================
+   UPDATE LOOP — runs every CONFIG.updateIntervalMs
+   ============================================================ */
+function update() {
+  NODES.forEach((_, i) => {
+    if (CONFIG.useMockData) {
+      weights[i] = simWeight(i);
+      adcRaws[i] = simADC(weights[i], i);
+      rssi[i]    = simRSSI(i);
+      temps[i]   = simTemp(i);
+      heaps[i]   = Math.max(100000, heaps[i] + Math.round((Math.random() - 0.5) * 2048));
+    }
+    /* If useMockData = false, fetch data from your ESP32 here
+       and assign to weights[i], adcRaws[i], rssi[i], temps[i], heaps[i] */
+    uptimes[i]++;
+    history[i].push({ t: timestamp(), w: weights[i] });
+    if (history[i].length > 1200) history[i].shift();
+  });
+
+  renderDeviceStrip();
+  updateWeightDisplay();
+  renderHX711Regs();
+  updateCharts();
+  updateClock();
+
+  if (tick % CONFIG.adcStreamRate === 0) updateADCStream();
+  if (tick % CONFIG.logRate === 0) addLogRow();
+
+  tick++;
+}
+
+/* ============================================================
+   DEVICE STRIP
+   ============================================================ */
+function renderDeviceCard(container, n, full = false) {
+  const r = rssi[n];
+  const w = weights[n];
+  const uptimeSec = uptimes[n];
+  const h = Math.floor(uptimeSec / 3600);
+  const m = Math.floor((uptimeSec % 3600) / 60);
+
+  const card = document.createElement('div');
+  card.className = 'device-card';
+  card.innerHTML = `
+    <div class="device-header">
+      <span class="device-id">${NODES[n].id}</span>
+      <div class="device-status-dot online"></div>
+    </div>
+    <div class="device-metrics">
+      <div class="dev-metric">
+        <span class="dev-label">Weight</span>
+        <span class="dev-value">${w.toFixed(2)} kg</span>
+      </div>
+      <div class="dev-metric">
+        <span class="dev-label">RSSI</span>
+        <span class="dev-value">${r} dBm ${signalBarsHTML(n)}</span>
+      </div>
+      <div class="dev-metric">
+        <span class="dev-label">CPU Temp</span>
+        <span class="dev-value">${temps[n].toFixed(1)} °C</span>
+      </div>
+      <div class="dev-metric">
+        <span class="dev-label">Free Heap</span>
+        <span class="dev-value">${(heaps[n]/1024).toFixed(0)} KB</span>
+      </div>
+      ${full ? `
+      <div class="dev-metric">
+        <span class="dev-label">IP Address</span>
+        <span class="dev-value" style="font-size:10px;color:var(--teal)">${NODES[n].ip}</span>
+      </div>
+      <div class="dev-metric">
+        <span class="dev-label">Uptime</span>
+        <span class="dev-value">${h}h ${m}m</span>
+      </div>` : ''}
+    </div>`;
+  container.appendChild(card);
+}
+
+function renderDeviceStrip() {
+  ['deviceStrip', 'deviceStripFull'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.innerHTML = '';
+      NODES.forEach((_, i) => renderDeviceCard(el, i, id === 'deviceStripFull'));
+    }
+  });
+}
+
+/* ============================================================
+   HX711 REGISTER PANEL
+   ============================================================ */
+function registerRow(name, value, cls = '', rawHTML = false) {
+  const valHTML = rawHTML ? value : `<span class="reg-val${cls ? ' ' + cls : ''}">${value}</span>`;
+  return `<div class="reg-row"><span class="reg-name">${name}</span>${valHTML}</div>`;
+}
+
+function renderHX711Regs() {
+  const n = 0;
+  const raw = adcRaws[n];
+  const binStr = (raw >>> 0).toString(2).padStart(24, '0');
+  const hexStr = '0x' + ((raw >>> 0).toString(16).toUpperCase().padStart(6, '0'));
+  const volt   = (raw / Math.pow(2, 23) * 0.0001).toFixed(6);
+  const w      = weights[n];
+  const nd     = NODES[n];
+
+  document.getElementById('hx711Regs').innerHTML = [
+    registerRow('Chip Model',      'HX711 Avia Semiconductor'),
+    registerRow('Input Channel',   `Channel ${nd.channel}, Gain ×${nd.gain}`),
+    registerRow('Output Data Rate',`${nd.sps} SPS`),
+    registerRow('Raw ADC (Dec)',    raw.toLocaleString(), 'green'),
+    registerRow('Raw ADC (Hex)',    hexStr, 'teal'),
+    registerRow('Binary (24-bit)',
+      `<span class="reg-val bin">${binStr.slice(0,8)} ${binStr.slice(8,16)} ${binStr.slice(16)}</span>`,
+      '', true),
+    registerRow('Tare Offset',     nd.offset.toLocaleString()),
+    registerRow('Cal. Factor',     nd.calFactor.toFixed(2) + ' LSB/kg'),
+    registerRow('Calibrated Wt.',  w.toFixed(4) + ' kg', 'green'),
+    registerRow('Diff. Voltage',   volt + ' V'),
+    registerRow('Status',
+      w > CONFIG.overloadThreshold
+        ? '<span class="reg-val red">OVERLOAD</span>'
+        : '<span class="reg-val green">OK</span>',
+      '', true),
+  ].join('');
+}
+
+/* ============================================================
+   WEIGHT DISPLAY
+   ============================================================ */
+function updateWeightDisplay() {
+  const w   = weights[0];
+  const max = CONFIG.maxCapacity;
+  const pct = Math.min(100, (w / max) * 100);
+
+  document.getElementById('weightDisplay').textContent = w.toFixed(2);
+  document.getElementById('weightBar').style.width = pct + '%';
+  document.getElementById('capBar').style.width    = pct + '%';
+  document.getElementById('capPct').textContent    = pct.toFixed(1) + '%';
+
+  const ovPct = Math.max(0, ((w - (max * 0.9)) / (max * 0.1)) * 100);
+  document.getElementById('ovBar').style.width = Math.min(100, ovPct) + '%';
+  document.getElementById('ovPct').textContent = ovPct.toFixed(1) + '%';
+
+  const status = w > CONFIG.overloadThreshold ? 'OVERLOAD'
+               : w > CONFIG.warningThreshold  ? 'WARNING'
+               : 'STABLE';
+  const el = document.getElementById('lcStatus');
+  el.textContent = status;
+  el.className = 'panel-badge ' + (status === 'STABLE' ? 'green' : status === 'WARNING' ? '' : 'red');
+
+  const hist = history[0];
+  if (hist.length > 0) {
+    const mn = Math.min(...hist.map(h => h.w));
+    document.getElementById('minVal').textContent = mn.toFixed(2) + ' kg';
+  }
+}
+
+/* ============================================================
+   ESP32 QUICK INFO PANEL
+   ============================================================ */
+function renderEspQuickInfo() {
+  const n = 0;
+  const nd = NODES[n];
+  const items = [
+    ['Chip Model',   'ESP32-WROOM-32'],
+    ['Flash',        '4 MB SPI'],
+    ['SDK',          'ESP-IDF v5.1.2'],
+    ['Framework',    'Arduino Core'],
+    ['SSID',         nd.ssid],
+    ['WiFi Channel', '6'],
+    ['MAC Address',  nd.mac],
+    ['IP Address',   nd.ip],
+    ['CPU Freq',     '240 MHz'],
+    ['CPU Cores',    'Dual (Xtensa LX6)'],
+    ['RTOS',         'FreeRTOS'],
+    ['Task Stack',   '8192 B'],
+  ];
+  document.getElementById('espQuickInfo').innerHTML = items.map(([k, v]) =>
+    `<div class="esp-row">
+      <span class="esp-key">${k}</span>
+      <span class="esp-val ${['MAC Address','IP Address','SDK'].includes(k) ? 'mono' : ''}">${v}</span>
+    </div>`
+  ).join('');
+}
+
+/* ============================================================
+   DEVICE DETAILS TAB
+   ============================================================ */
+function renderDeviceDetails() {
+  const grid = document.getElementById('deviceDetailGrid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  NODES.forEach((nd, i) => {
+    const h   = Math.floor(uptimes[i] / 3600);
+    const m   = Math.floor((uptimes[i] % 3600) / 60);
+    const div = document.createElement('div');
+    div.className = 'panel';
+    div.innerHTML = `
+      <div class="panel-header">
+        <span class="panel-title">${nd.id}</span>
+        <span class="panel-badge teal">ONLINE</span>
+      </div>
+      <div class="panel-body">
+        <div class="register-grid">
+          ${registerRow('MAC Address',  nd.mac)}
+          ${registerRow('IP Address',   nd.ip, 'teal')}
+          ${registerRow('SSID',         nd.ssid)}
+          ${registerRow('RSSI',         rssi[i] + ' dBm')}
+          ${registerRow('CPU Temp',     temps[i].toFixed(1) + ' °C')}
+          ${registerRow('Free Heap',    (heaps[i] / 1024).toFixed(0) + ' KB')}
+          ${registerRow('Uptime',       h + 'h ' + m + 'm')}
+          ${registerRow('HX711 Gain',   '×' + nd.gain)}
+          ${registerRow('HX711 SPS',    nd.sps + ' Hz')}
+          ${registerRow('HX711 Ch.',    nd.channel)}
+          ${registerRow('Cal. Factor',  nd.calFactor.toFixed(2))}
+          ${registerRow('Tare Offset',  nd.offset.toLocaleString())}
+          ${registerRow('Weight',       weights[i].toFixed(3) + ' kg', 'green')}
+          ${registerRow('Raw ADC',      adcRaws[i].toLocaleString())}
+        </div>
+      </div>`;
+    grid.appendChild(div);
+  });
+}
+
+/* ============================================================
+   ADC STREAM DISPLAY
+   ============================================================ */
+function updateADCStream() {
+  const el = document.getElementById('adcStream');
+  if (!el) return;
+  const n = 0;
+  const lines = [];
+  for (let i = 0; i < 7; i++) {
+    const noise = (Math.random() - 0.5) * 100;
+    const raw   = Math.round(adcRaws[n] + noise);
+    const hex   = (raw >>> 0).toString(16).toUpperCase().padStart(6, '0');
+    const wkg   = ((raw - NODES[n].offset) / NODES[n].calFactor).toFixed(4);
+    lines.push(
+      `[${timestamp().slice(11)}]  ADC=<span style="color:var(--amber)">${raw.toString().padStart(8)}</span>` +
+      `  HEX=<span style="color:var(--muted2)">0x${hex}</span>  W=${wkg}kg`
+    );
+  }
+  el.innerHTML = lines.join('<br>');
+}
+
+/* ============================================================
+   HX711 TIMING DIAGRAM (SVG)
+   ============================================================ */
+function renderTimingViz() {
+  const el = document.getElementById('timingViz');
+  if (!el) return;
+  const pulses = 27, pw = 8, gap = 4, waveH = 30, topSCK = 20, topDOUT = 70;
+  const totalW = (pw + gap) * pulses + 20;
+  const bits = '010110110101001101100101110100100';
+
+  let sckPath  = `M0 ${topSCK + waveH}`;
+  let doutPath = `M0 ${topDOUT + waveH}`;
+
+  for (let i = 0; i < pulses; i++) {
+    const x   = i * (pw + gap) + 20;
+    const bit = parseInt(bits[i % bits.length]);
+    sckPath  += ` L${x} ${topSCK+waveH} L${x} ${topSCK} L${x+pw} ${topSCK} L${x+pw} ${topSCK+waveH}`;
+    const dy  = bit ? 0 : waveH;
+    doutPath += ` L${x} ${topDOUT+dy} L${x+pw} ${topDOUT+dy}`;
+  }
+
+  el.innerHTML = `
+    <svg width="100%" viewBox="0 0 ${totalW} 110" style="overflow:visible">
+      <text x="0" y="${topSCK-4}" style="font-size:9px;fill:var(--muted);font-family:var(--mono)">PD_SCK</text>
+      <text x="0" y="${topDOUT-4}" style="font-size:9px;fill:var(--muted);font-family:var(--mono)">DOUT</text>
+      <path d="${sckPath}"  fill="none" stroke="var(--amber)" stroke-width="1.5"/>
+      <path d="${doutPath}" fill="none" stroke="var(--teal)"  stroke-width="1.5"/>
+      <text x="22" y="108" style="font-size:8px;fill:var(--muted);font-family:var(--mono)">
+        ← 24 data bits + 1-3 control pulses (PD_SCK) →
+      </text>
+    </svg>`;
+}
+
+/* ============================================================
+   CHARTS
+   ============================================================ */
+function initCharts() {
+  const gridColor = 'rgba(255,255,255,0.05)';
+  const tickColor = '#6b7280';
+  const colors    = ['#f0a030', '#26c0a0', '#4898e8'];
+  const bgColors  = ['rgba(240,160,48,0.08)', 'rgba(38,192,160,0.08)', 'rgba(72,152,232,0.08)'];
+
+  const sharedOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 0 },
+    plugins: { legend: { display: false } },
+    scales: {
+      x: {
+        ticks: { color: tickColor, font: { size: 9 }, maxTicksLimit: 7 },
+        grid:  { color: gridColor },
+        border:{ color: 'transparent' },
+      },
+      y: {
+        ticks: { color: tickColor, font: { size: 9 }, callback: v => v.toFixed(1) + 'kg' },
+        grid:  { color: gridColor },
+        border:{ color: 'transparent' },
+      }
+    }
+  };
+
+  const wCtx = document.getElementById('weightChart');
+  if (wCtx) {
+    wChart = new Chart(wCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: NODES.map((nd, i) => ({
+          label: nd.id,
+          data: [],
+          borderColor: colors[i],
+          backgroundColor: bgColors[i],
+          borderWidth: i === 0 ? 2 : 1,
+          tension: 0.4,
+          fill: i === 0,
+          pointRadius: 0,
+        })),
+      },
+      options: sharedOpts,
+    });
+  }
+
+  const mCtx = document.getElementById('multiChart');
+  if (mCtx) {
+    mChart = new Chart(mCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: NODES.map((nd, i) => ({
+          label: nd.id,
+          data: [],
+          borderColor: colors[i],
+          borderWidth: 1.5,
+          tension: 0.4,
+          pointRadius: 0,
+        })),
+      },
+      options: sharedOpts,
+    });
+  }
+}
+
+function updateCharts() {
+  const label  = timestamp().slice(11, 19);
+  const maxPts = chartRange;
+
+  [wChart, mChart].forEach(ch => {
+    if (!ch) return;
+    ch.data.labels.push(label);
+    NODES.forEach((_, i) => ch.data.datasets[i].data.push(weights[i]));
+    if (ch.data.labels.length > maxPts) {
+      ch.data.labels.shift();
+      ch.data.datasets.forEach(ds => ds.data.shift());
+    }
+    ch.update('none');
+  });
+}
+
+/* ============================================================
+   DATA LOG
+   ============================================================ */
+function addLogRow() {
+  const n = 0;
+  const w = weights[n];
+  const status = w > CONFIG.overloadThreshold ? 'OVERLOAD'
+               : w > CONFIG.warningThreshold  ? 'WARN'
+               : 'OK';
+
+  const entry = {
+    time:   timestamp(),
+    node:   NODES[n].id,
+    weight: w,
+    adc:    adcRaws[n],
+    temp:   temps[n],
+    rssi:   rssi[n],
+    heap:   heaps[n],
+    status,
+  };
+  logData.unshift(entry);
+  if (logData.length > CONFIG.maxLogRows) logData.pop();
+
+  const body = document.getElementById('logBody');
+  if (!body) return;
+  const cls = status === 'OK' ? 'ok' : status === 'WARN' ? 'warn' : 'err';
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td>${entry.time}</td>
+    <td>${entry.node}</td>
+    <td>${entry.weight.toFixed(3)}</td>
+    <td>${entry.adc.toLocaleString()}</td>
+    <td>${entry.temp.toFixed(1)}</td>
+    <td>${entry.rssi}</td>
+    <td>${(entry.heap / 1024).toFixed(0)} KB</td>
+    <td class="${cls}">${entry.status}</td>`;
+  body.insertBefore(tr, body.firstChild);
+  if (body.children.length > 200) body.removeChild(body.lastChild);
+  document.getElementById('logCount').textContent = logData.length + ' records';
+}
+
+function clearLog() {
+  logData = [];
+  document.getElementById('logBody').innerHTML = '';
+  document.getElementById('logCount').textContent = '0 records';
+}
+
+function exportCSV() {
+  const header = 'Timestamp,Node,Weight_kg,Raw_ADC,Temp_C,RSSI_dBm,FreeHeap_B,Status\n';
+  const rows   = logData.map(e =>
+    `${e.time},${e.node},${e.weight.toFixed(3)},${e.adc},${e.temp.toFixed(1)},${e.rssi},${e.heap},${e.status}`
+  ).join('\n');
+  const blob = new Blob([header + rows], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = Object.assign(document.createElement('a'), { href: url, download: 'iot_data_log.csv' });
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ============================================================
+   UI CONTROLS
+   ============================================================ */
+function switchTab(event, name) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'devices') renderDeviceDetails();
+  if (name === 'livedata') renderTimingViz();
+}
+
+function setRange(btn, secs) {
+  document.querySelectorAll('#tab-overview .sel-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  chartRange = secs;
+}
+
+function setNode(btn, n) {
+  document.querySelectorAll('#tab-livedata .sel-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedNode = n;
+  if (mChart) {
+    mChart.data.datasets.forEach((ds, i) => { ds.hidden = n < 3 && i !== n; });
+    mChart.update();
+  }
+}
+
+function updateClock() {
+  document.getElementById('clockDisplay').textContent = timestamp().slice(11);
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+document.addEventListener('DOMContentLoaded', () => {
+  renderDeviceStrip();
+  renderEspQuickInfo();
+  initCharts();
+  update();
+  setInterval(update, CONFIG.updateIntervalMs);
+});
+</script>
+</body>
+</html>
